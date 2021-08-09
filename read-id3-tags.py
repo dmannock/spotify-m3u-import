@@ -10,6 +10,7 @@ import logging
 import logging.handlers
 import spotipy
 import spotipy.util as util
+from spotipy.oauth2 import SpotifyOAuth
 from difflib import SequenceMatcher
 from termcolor import colored
 
@@ -18,6 +19,7 @@ def parse_arguments():
     p.add_argument('-f', '--file', help='Path to m3u playlist file', type=argparse.FileType('r'), required=True)
     p.add_argument('-u', '--username', help='Spotify username', required=True)
     p.add_argument('-d', '--debug', help='Debug mode', action='store_true', default=False)
+    p.add_argument('-s', '--searchonly', help='Search only mode', action='store_true', default=False)
     return p.parse_args()
 
 def load_playlist_file(playlist_file):
@@ -40,7 +42,7 @@ def read_id3_tags(file_name):
         logger.debug('Track "%s" failed ID3 tag load: %s' % (track, str(e)))
     else:
         logger.debug('Reading tags from "%s"' % track)
-        if track_id3.tag is not None:
+        if track_id3 is not None and track_id3.tag is not None:
             if track_id3.tag.artist is not None and track_id3.tag.title is not None:
                 tag_data = {'artist': track_id3.tag.artist, 'title': track_id3.tag.title}
     return tag_data
@@ -118,9 +120,27 @@ def format_track_info(track):
         formatted_spotify
     )
 
+def writeNotfoundFile(playlist, notfoundtracks):
+    playlist_name = str(playlist.split('.')[0])
+    notfound_filename = '{}_notfound.txt'.format(playlist_name)
+
+    def sanitizeTrack(track, key):
+        return '{} - {}'.format(repr(track[key]['artist']).strip("'").strip("\""), repr(track[key]['title']).strip("'").strip("\""))
+
+    lines = []
+    for track in notfoundtracks:
+        if track['id3_data']:
+            lines.append(sanitizeTrack(track, 'id3_data'))
+        elif track['guess']:
+            lines.append(sanitizeTrack(track, 'guess'))
+        else:
+            lines.append(track['path'])
+            
+    with open(notfound_filename, 'w') as file:
+        file.write('\n'.join(lines))
+
 if __name__ == "__main__":
     args = parse_arguments()
-    sp = spotipy.Spotify()
 
     logger = logging.getLogger(__name__)
     if args.debug:
@@ -131,9 +151,13 @@ if __name__ == "__main__":
         eyed3.log.setLevel("ERROR")
         stdout_level = logging.CRITICAL
 
+    spotify_username = args.username
+    auth_manager=SpotifyOAuth(scope='playlist-modify-private', username=spotify_username)
+    sp = spotipy.Spotify(auth_manager=auth_manager)
+
     tracks = load_playlist_file(args.file)
 
-    print colored('Parsed %s tracks from %s' % (len(tracks), args.file.name), 'green')
+    print (colored('Parsed %s tracks from %s' % (len(tracks), args.file.name), 'green'))
 
     for track in tracks:
         track['id3_data'] = read_id3_tags(track['path'])
@@ -141,35 +165,44 @@ if __name__ == "__main__":
             track['guess'] = guess_missing_track_info(track['path'])
         track['spotify_data'] = find_spotify_track(track)
 
-        print format_track_info(track)
+        print (format_track_info(track))
 
-    spotify_tracks = [ k['spotify_data']['id'] for k in tracks if k.get('spotify_data') ]
-    spotify_playlist_name = args.file.name
-    spotify_username = args.username
+    found_tracks, notfound_tracks = [], []
+    for t in tracks:
+        (found_tracks if t.get('spotify_data') else notfound_tracks).append(t)
 
-    if len(spotify_tracks) < 1:
-        print '\nNo tracks matched on Spotify'
+    spotify_playlist_name = os.path.basename(args.file.name)
+
+    if len(found_tracks) < 1:
+        print ('\nNo tracks matched on Spotify')
         sys.exit(0)
 
-    print '\n%s/%s of tracks matched on Spotify, creating playlist "%s" on Spotify...' % (len(spotify_tracks), len(tracks), spotify_playlist_name),
+    if len(notfound_tracks) > 0:
+        print ('\nTracks not found on Spotify:')
+        for track in notfound_tracks:
+            print (format_track_info(track))
+        writeNotfoundFile(spotify_playlist_name, notfound_tracks)
 
-    token = util.prompt_for_user_token(spotify_username, 'playlist-modify-private')
+    print ('\n%s/%s of tracks matched on Spotify' % (len(found_tracks), len(tracks)))
 
-    if token:
-        try:
-            sp = spotipy.Spotify(auth=token)
-            sp.trace = False
-            playlist = sp.user_playlist_create(spotify_username, spotify_playlist_name, public=False)
-            if len(spotify_tracks) > 100:
-                def chunker(seq, size):
-                    return (seq[pos:pos + size] for pos in xrange(0, len(seq), size))
-                for spotify_tracks_chunk in chunker(spotify_tracks, 100):
-                    results = sp.user_playlist_add_tracks(spotify_username, playlist['id'], spotify_tracks_chunk)
-            else:
-                results = sp.user_playlist_add_tracks(spotify_username, playlist['id'], spotify_tracks)
-        except Exception as e:
-            logger.critical('Spotify error: %s' % str(e))
+    if args.searchonly:
+        print ('\nSearch only mode complete')
+        sys.exit(0)
+
+    print ('\ncreating playlist "%s" on Spotify...' % spotify_playlist_name)
+
+    try:
+        sp.trace = False
+        playlist = sp.user_playlist_create(spotify_username, spotify_playlist_name, public=False)
+        spotify_track_ids = [ k['spotify_data']['id'] for k in tracks if k.get('spotify_data') ]
+        if len(spotify_track_ids) > 100:
+            def chunker(seq, size):
+                return (seq[pos:pos + size] for pos in range(0, len(seq), size))
+            for spotify_tracks_chunk in chunker(spotify_track_ids, 100):
+                results = sp.user_playlist_add_tracks(spotify_username, playlist['id'], spotify_tracks_chunk)
         else:
-            print 'done\n'
+            results = sp.user_playlist_add_tracks(spotify_username, playlist['id'], spotify_track_ids)
+    except Exception as e:
+        logger.critical('Spotify error: %s' % str(e))
     else:
-        logger.critical('Can\'t get token for %s user' % spotify_username)
+        print ('done\n')

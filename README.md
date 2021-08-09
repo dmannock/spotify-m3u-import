@@ -32,6 +32,13 @@ export SPOTIPY_CLIENT_SECRET='your-spotify-client-secret'
 export SPOTIPY_REDIRECT_URI='your-app-redirect-url'
 ```
 
+windows
+```
+SET SPOTIPY_CLIENT_ID=your-spotify-client-id
+SET SPOTIPY_CLIENT_SECRET=your-spotify-client-secret
+SET SPOTIPY_REDIRECT_URI=your-app-redirect-url
+```
+
 ## Example
 
 ```
@@ -46,6 +53,7 @@ optional arguments:
   -u USERNAME, --username USERNAME
                         Spotify username
   -d, --debug           Debug mode
+  -s, --searchonly      Search only mode
 $ 
 $ ./read-id3-tags.py -f my_playlist.m3u -u my_username
 Parsed 3 tracks from my_playlist.m3u
@@ -67,3 +75,5 @@ Spotify: Dave Spoon - At Night - Shadow Child & T. Williams Re-vibe, 1JEA273o693
 
 3/3 of tracks matched on Spotify, creating playlist "my_playlist.m3u" on Spotify... done
 ```
+
+songs not found will be output and saved in ```<playlist name>_notfound.txt```
